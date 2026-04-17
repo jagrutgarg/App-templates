@@ -290,6 +290,114 @@ html, body, [data-testid="stAppViewContainer"] {
     border-radius: 10px !important;
 }
 
+/* ── Image attach toolbar ── */
+.attach-toolbar {
+    display: flex;
+    gap: .6rem;
+    align-items: center;
+    padding: .75rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    margin-bottom: .75rem;
+}
+.attach-label {
+    font-family: 'Space Mono', monospace;
+    font-size: .68rem;
+    color: var(--muted);
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    margin-right: .25rem;
+    white-space: nowrap;
+}
+
+/* style the file uploader inside toolbar as minimal */
+.attach-toolbar [data-testid="stFileUploader"] {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+}
+.attach-toolbar [data-testid="stFileUploader"] label { display: none !important; }
+.attach-toolbar [data-testid="stFileUploaderDropzone"] {
+    background: rgba(255,107,44,.08) !important;
+    border: 1px solid rgba(255,107,44,.25) !important;
+    border-radius: 10px !important;
+    padding: .4rem .9rem !important;
+    min-height: unset !important;
+}
+.attach-toolbar [data-testid="stFileUploaderDropzoneInstructions"] {
+    font-size: .78rem !important;
+    color: var(--accent1) !important;
+}
+
+/* Camera input styling */
+[data-testid="stCameraInput"] {
+    background: var(--panel) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 16px !important;
+    overflow: hidden !important;
+}
+[data-testid="stCameraInput"] button {
+    background: linear-gradient(135deg, var(--accent2), #0066CC) !important;
+    border: none !important;
+    color: #000 !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-weight: 600 !important;
+    border-radius: 10px !important;
+}
+
+/* ── Chat image preview bubble ── */
+.chat-img-preview {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: .75rem;
+    display: inline-flex;
+    flex-direction: column;
+    gap: .5rem;
+    max-width: 320px;
+    margin-bottom: .5rem;
+}
+.chat-img-preview img {
+    border-radius: 10px !important;
+    width: 100%;
+    object-fit: cover;
+    max-height: 200px;
+}
+.chat-img-caption {
+    font-family: 'Space Mono', monospace;
+    font-size: .65rem;
+    color: var(--muted);
+    letter-spacing: .08em;
+    text-align: center;
+}
+
+/* ── Tab styling ── */
+[data-testid="stTabs"] [role="tablist"] {
+    background: var(--surface) !important;
+    border-radius: 12px !important;
+    padding: .3rem !important;
+    gap: .25rem !important;
+    border: 1px solid var(--border) !important;
+    margin-bottom: 1rem;
+}
+[data-testid="stTabs"] [role="tab"] {
+    background: transparent !important;
+    color: var(--muted) !important;
+    border-radius: 8px !important;
+    font-family: 'DM Sans', sans-serif !important;
+    font-size: .85rem !important;
+    font-weight: 500 !important;
+    border: none !important;
+    padding: .4rem 1rem !important;
+    transition: all .2s !important;
+}
+[data-testid="stTabs"] [role="tab"][aria-selected="true"] {
+    background: linear-gradient(135deg, rgba(255,107,44,.2), rgba(255,61,127,.15)) !important;
+    color: var(--accent1) !important;
+    border: 1px solid rgba(255,107,44,.3) !important;
+}
+
 /* ── Image uploader ── */
 [data-testid="stFileUploader"] {
     background: var(--panel) !important;
@@ -470,6 +578,8 @@ if "💬" in option:
     # Init session
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "pending_image" not in st.session_state:
+        st.session_state.pending_image = None
 
     # Welcome message
     if not st.session_state.messages:
@@ -477,36 +587,153 @@ if "💬" in option:
             st.markdown(
                 "🙏 **Namaste!** I'm SevaBot, your AI civic assistant. "
                 "Tell me your complaint — about roads, water, electricity, sanitation, or any civic issue. "
+                "You can also **📎 attach a photo** of the problem! "
                 "I'll register it instantly and track resolution in real-time."
             )
 
     # Previous messages
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
+            if msg.get("image"):
+                st.image(msg["image"], width=300)
             st.markdown(msg["content"])
 
-    # Input
-    if prompt := st.chat_input("Describe your civic complaint…"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    # ── Image uploader (above input, styled like an attachment tray) ──────────
+    st.markdown("""
+    <style>
+    /* Hide the default file uploader label & drag zone — keep it compact */
+    div[data-testid="stFileUploader"] {
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+    }
+    div[data-testid="stFileUploader"] > label { display: none !important; }
+    div[data-testid="stFileUploader"] section {
+        background: var(--panel) !important;
+        border: 1px dashed var(--border) !important;
+        border-radius: 12px !important;
+        padding: .6rem 1rem !important;
+        min-height: unset !important;
+    }
+    div[data-testid="stFileUploader"] section:hover {
+        border-color: var(--accent1) !important;
+    }
+    div[data-testid="stFileUploader"] section > div {
+        gap: .5rem !important;
+    }
+    /* attachment tray wrapper */
+    .attach-tray {
+        display: flex;
+        align-items: center;
+        gap: .75rem;
+        margin-bottom: .5rem;
+        padding: .5rem .75rem;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+    }
+    .attach-label {
+        font-family: 'Space Mono', monospace;
+        font-size: .68rem;
+        color: var(--muted);
+        letter-spacing: .08em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    .attach-label span { color: var(--accent1); margin-right: .35rem; }
+    </style>
+    """, unsafe_allow_html=True)
 
-        # Smart mock responses based on keywords
-        p = prompt.lower()
-        if any(w in p for w in ["road","pothole","street"]):
-            response = "🛣️ **Road complaint registered** · Ticket `#RD-2025-{:04d}`\n\nYour report has been forwarded to the **PWD (Public Works Department)**. Expected resolution: **3–5 working days**. You'll receive SMS updates at each stage.".format(len(st.session_state.messages))
+    # Attachment tray
+    st.markdown('<div class="attach-tray"><span class="attach-label"><span>📎</span> Attach Photo (optional)</span>', unsafe_allow_html=True)
+    uploaded_img = st.file_uploader(
+        "attach",
+        type=["jpg", "jpeg", "png", "webp"],
+        key="chat_img_upload",
+        label_visibility="collapsed",
+        help="Upload or drag a photo of the civic issue",
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Preview the attached image before sending
+    if uploaded_img:
+        col_prev, col_clear = st.columns([3, 1])
+        with col_prev:
+            st.image(uploaded_img, caption="📸 Attached — will be sent with your message", width=260)
+        with col_clear:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("✕ Remove", key="remove_img", use_container_width=True):
+                st.session_state.chat_img_upload = None
+                st.rerun()
+        st.session_state.pending_image = uploaded_img
+    else:
+        st.session_state.pending_image = None
+
+    # Text input
+    if prompt := st.chat_input("Describe your civic complaint… (or just send a photo 👆)"):
+        img_data = st.session_state.pending_image
+
+        # Build user message
+        user_msg: dict = {"role": "user", "content": prompt or "📸 *Sent a photo*"}
+        if img_data:
+            user_msg["image"] = img_data
+
+        st.session_state.messages.append(user_msg)
+        with st.chat_message("user"):
+            if img_data:
+                st.image(img_data, width=300)
+            st.markdown(user_msg["content"])
+
+        # Smart response — consider both text and image
+        p = (prompt or "").lower()
+        has_img = img_data is not None
+        img_note = "\n\n📸 *Your photo has been attached to this ticket for field verification.*" if has_img else ""
+
+        if any(w in p for w in ["road","pothole","street"]) or (has_img and not prompt):
+            category = "Road / Infrastructure"
+            ticket_prefix = "RD"
+            dept = "PWD (Public Works Department)"
+            eta = "3–5 working days"
+            emoji = "🛣️"
         elif any(w in p for w in ["water","pipe","supply"]):
-            response = "💧 **Water supply complaint registered** · Ticket `#WS-2025-{:04d}`\n\nEscalated to the **Municipal Water Authority**. An engineer will inspect within **24 hours**. Emergency? Call **1916**.".format(len(st.session_state.messages))
+            category = "Water Supply"
+            ticket_prefix = "WS"
+            dept = "Municipal Water Authority"
+            eta = "24 hours"
+            emoji = "💧"
         elif any(w in p for w in ["light","electricity","power","outage"]):
-            response = "⚡ **Power complaint registered** · Ticket `#PW-2025-{:04d}`\n\nAlert sent to **DISCOM control room**. Lineman dispatch in **2–4 hours**. Track live at the portal.".format(len(st.session_state.messages))
+            category = "Electricity / Power"
+            ticket_prefix = "PW"
+            dept = "DISCOM Control Room"
+            eta = "2–4 hours"
+            emoji = "⚡"
         elif any(w in p for w in ["garbage","waste","sanitation","clean"]):
-            response = "🗑️ **Sanitation complaint registered** · Ticket `#SN-2025-{:04d}`\n\nForwarded to **Municipal Sanitation Wing**. Pickup scheduled within **48 hours**.".format(len(st.session_state.messages))
+            category = "Sanitation"
+            ticket_prefix = "SN"
+            dept = "Municipal Sanitation Wing"
+            eta = "48 hours"
+            emoji = "🗑️"
         else:
-            response = "✅ **Complaint registered successfully** · Ticket `#GN-2025-{:04d}`\n\nYour grievance has been logged and assigned to the concerned department. Expected response within **72 hours**. Reference this ticket number for follow-ups.".format(len(st.session_state.messages))
+            category = "General Grievance"
+            ticket_prefix = "GN"
+            dept = "Concerned Department"
+            eta = "72 hours"
+            emoji = "✅"
+
+        ticket_no = f"#{ticket_prefix}-2025-{len(st.session_state.messages):04d}"
+        response = (
+            f"{emoji} **{category} complaint registered** · Ticket `{ticket_no}`\n\n"
+            f"Forwarded to **{dept}**. Expected resolution: **{eta}**."
+            f"{img_note}"
+        )
 
         with st.chat_message("assistant"):
             st.markdown(response)
         st.session_state.messages.append({"role": "assistant", "content": response})
+        # Clear pending image after send
+        st.session_state.pending_image = None
+        st.rerun()
 
 
 # ── IMAGE CLASSIFIER ─────────────────────────────────────────────────────────
