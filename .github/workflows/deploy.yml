@@ -28,7 +28,7 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
           databricks --version
 
-      # Step 4: Sync entire app folder (BEST METHOD)
+      # Step 4: Upload full app folder
       - name: Upload app folder to Databricks Workspace
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
@@ -44,25 +44,18 @@ jobs:
           # Create workspace directory if not exists
           databricks workspace mkdirs "$APP_WORKSPACE_PATH"
 
-          # Sync entire folder (THIS FIXES YOUR ISSUE)
+          # Upload entire folder
           databricks workspace import-dir "$APP_LOCAL_PATH" "$APP_WORKSPACE_PATH" --overwrite
 
           echo "Upload complete ✅"
 
-      # Step 5: Restart Databricks App
-      - name: Restart Databricks App
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      # Step 5: No restart needed
+      - name: Skip restart (auto handled by Databricks)
         run: |
-          APP_NAME="${{ secrets.DATABRICKS_APP_NAME }}"
+          echo "Databricks will automatically detect changes."
+          echo "If not, restart once manually from UI."
 
-          echo "Restarting app: $APP_NAME"
-          databricks apps restart "$APP_NAME"
-
-          echo "App restart triggered 🚀"
-
-      # Step 6: Done
+      # Step 6: Deployment summary
       - name: Deployment summary
         run: |
           echo "================================="
