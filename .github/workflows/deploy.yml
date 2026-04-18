@@ -12,62 +12,125 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repo
+      # ── Step 1: Checkout repo ────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Step 2: Setup Python
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      # Step 3: Install Databricks CLI
+      # ── Step 2: Install Databricks CLI ───────────────────────────────────────
       - name: Install Databricks CLI
         run: |
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
           databricks --version
 
-      # Step 4: Upload full app folder
-      - name: Upload app folder to Databricks Workspace
+      # ── Step 3: Find REAL app source path (run once, read the logs) ──────────
+      # After first run, check Actions logs → this step shows the exact
+      # source_code_path your app uses. Copy it and update APP_WORKSPACE_PATH below.
+      - name: Print app details from Databricks
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          APP_WORKSPACE_PATH="/Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/janta-seva"
-          APP_LOCAL_PATH="e2e-chatbot-app-next"
+          APP_NAME="${{ secrets.DATABRICKS_APP_NAME }}"
+          echo "=== App details (look for source_code_path) ==="
+          curl -s "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME" \
+            -H "Authorization: Bearer $DATABRICKS_TOKEN" | python3 -m json.tool
 
-          echo "Syncing full folder..."
-          echo "Local: $APP_LOCAL_PATH"
-          echo "Remote: $APP_WORKSPACE_PATH"
+      # ── Step 4: Upload app files to Databricks Workspace ─────────────────────
+      - name: Upload app files
+        env:
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          # ⚠️ Must match the source_code_path shown in Step 3 logs exactly
+          APP_WORKSPACE_PATH="/Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/janta-seva"
+
+          # ⚠️ Folder inside your repo that contains app.py
+          APP_LOCAL_PATH="streamlit-chatbot-app"
+
+          echo "Uploading from: $APP_LOCAL_PATH"
+          echo "Uploading to  : $APP_WORKSPACE_PATH"
 
           databricks workspace mkdirs "$APP_WORKSPACE_PATH"
 
-          databricks workspace import-dir "$APP_LOCAL_PATH" "$APP_WORKSPACE_PATH" --overwrite
+          for file in app.py app.yaml model_serving_utils.py requirements.txt; do
+            if [ -f "$APP_LOCAL_PATH/$file" ]; then
+              echo "→ Uploading $file"
+              databricks workspace import \
+                --file "$APP_LOCAL_PATH/$file" \
+                --overwrite \
+                "$APP_WORKSPACE_PATH/$file"
+            else
+              echo "⚠️  $file not found, skipping"
+            fi
+          done
 
-          echo "Upload complete ✅"
+          echo ""
+          echo "=== Files now in workspace ==="
+          databricks workspace list "$APP_WORKSPACE_PATH"
 
-      # Step 5: Restart app via API (IMPORTANT FIX)
-      - name: Restart Databricks App via API
+      # ── Step 5: Trigger fresh deployment (NOT just restart) ──────────────────
+      # restart alone does NOT pick up new source files in Databricks Apps.
+      # A new deployment call is required.
+      - name: Trigger new deployment
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          APP_NAME: ${{ secrets.DATABRICKS_APP_NAME }}
         run: |
-          echo "Restarting app: $APP_NAME"
+          APP_NAME="${{ secrets.DATABRICKS_APP_NAME }}"
+          SOURCE_PATH="/Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/janta-seva"
 
-          curl -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/restart" \
+          echo "Triggering deployment for: $APP_NAME"
+          echo "Source path: $SOURCE_PATH"
+
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" \
+            -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/deployments" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-            -H "Content-Type: application/json"
+            -H "Content-Type: application/json" \
+            -d "{\"source_code_path\": \"$SOURCE_PATH\"}")
 
-          echo "Restart request sent 🚀"
+          echo "Full response: $RESPONSE"
+          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+          echo "HTTP status: $HTTP_CODE"
 
-      # Step 6: Deployment summary
-      - name: Deployment summary
+          if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
+            echo "✅ New deployment triggered successfully"
+          else
+            echo "⚠️ Deployment API returned $HTTP_CODE"
+            echo "Falling back to restart..."
+            curl -s -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/restart" \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/json"
+            echo "Restart sent as fallback."
+          fi
+
+      # ── Step 6: Poll until app is RUNNING ────────────────────────────────────
+      - name: Wait for app to be live
+        env:
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          echo "================================="
-          echo "✅ Deployment successful"
-          echo "Commit: ${{ github.sha }}"
-          echo "Branch: ${{ github.ref_name }}"
-          echo "Time: $(date -u)"
-          echo "================================="
+          APP_NAME="${{ secrets.DATABRICKS_APP_NAME }}"
+          echo "Polling app status (up to 90 seconds)..."
+
+          for i in $(seq 1 6); do
+            sleep 15
+            RAW=$(curl -s "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME" \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN")
+
+            STATE=$(echo "$RAW" | python3 -c \
+              "import sys,json; d=json.load(sys.stdin); print(d.get('status',{}).get('state','UNKNOWN'))" \
+              2>/dev/null || echo "UNKNOWN")
+
+            echo "  Check $i/6 → State: $STATE"
+            [ "$STATE" = "RUNNING" ] && echo "✅ App is RUNNING!" && break
+          done
+
+      # ── Step 7: Final summary ─────────────────────────────────────────────────
+      - name: Summary
+        run: |
+          echo "============================================"
+          echo "  ✅ Janta Seva deployed!"
+          echo "  Commit : ${{ github.sha }}"
+          echo "  Branch : ${{ github.ref_name }}"
+          echo "  Time   : $(date -u)"
+          echo "============================================"
