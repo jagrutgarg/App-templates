@@ -1,34 +1,10 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# FILE LOCATION IN YOUR REPO:
-#   App-templates/
-#   └── .github/
-#       └── workflows/
-#           └── deploy.yml          ← THIS FILE GOES HERE
-#   └── streamlit-chatbot-app/
-#       ├── app.py
-#       ├── app.yaml
-#       ├── model_serving_utils.py
-#       └── requirements.txt
-#
-# HOW IT WORKS:
-#   Every time you push changes to the `main` branch, GitHub Actions will:
-#   1. Upload your latest app.py (and other files) to Databricks workspace
-#   2. Restart the Databricks App so it picks up the new code
-#   No manual redeployment needed ever again.
-# ─────────────────────────────────────────────────────────────────────────────
-
 name: Deploy Janta Seva to Databricks Apps
 
 on:
   push:
     branches:
-      - main                          # Triggers on every push to main
-    paths:
-      - 'streamlit-chatbot-app/**'    # Only triggers if files in this folder change
-                                      # Remove this `paths` block if your repo root
-                                      # IS the app folder (i.e., app.py is at root)
-
-  workflow_dispatch:                  # Also allows manual trigger from GitHub UI
+      - main
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -36,76 +12,64 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── Step 1: Check out your repo ─────────────────────────────────────────
+      # Step 1: Checkout repo
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── Step 2: Set up Python ───────────────────────────────────────────────
+      # Step 2: Setup Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ── Step 3: Install Databricks CLI ──────────────────────────────────────
+      # Step 3: Install Databricks CLI
       - name: Install Databricks CLI
         run: |
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
           databricks --version
 
-      # ── Step 4: Upload app files to Databricks Workspace ────────────────────
-      # This syncs your local app folder to the Databricks workspace path
+      # Step 4: Upload app files to Databricks
       - name: Upload app files to Databricks Workspace
         env:
-          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Upload each file individually to your workspace path
-          # Replace /Workspace/Users/YOUR_EMAIL/janta-seva with your actual path
-          # (find it in Databricks → Workspace → your app folder → right-click → Copy Path)
-
           APP_WORKSPACE_PATH="/Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/janta-seva"
           APP_LOCAL_PATH="streamlit-chatbot-app"
-
-          # If app.py is at your repo root (not in a subfolder), use:
-          # APP_LOCAL_PATH="."
 
           echo "Uploading files to $APP_WORKSPACE_PATH ..."
 
           for file in app.py app.yaml model_serving_utils.py requirements.txt; do
             if [ -f "$APP_LOCAL_PATH/$file" ]; then
-              echo "  → Uploading $file"
+              echo "Uploading $file"
               databricks workspace import \
                 --file "$APP_LOCAL_PATH/$file" \
                 --overwrite \
                 "$APP_WORKSPACE_PATH/$file"
+            else
+              echo "File $file not found, skipping"
             fi
           done
 
           echo "Upload complete."
 
-      # ── Step 5: Restart the Databricks App ──────────────────────────────────
-      # This makes Databricks pick up your new code and restart the app process
+      # Step 5: Restart Databricks App
       - name: Restart Databricks App
         env:
-          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # Replace 'janta-seva' with your exact app name as shown in
-          # Databricks → Apps → (your app name)
           APP_NAME="${{ secrets.DATABRICKS_APP_NAME }}"
 
-          echo "Restarting Databricks App: $APP_NAME ..."
-
+          echo "Restarting app: $APP_NAME"
           databricks apps restart "$APP_NAME"
 
-          echo "App restart triggered. It will be live in ~30-60 seconds."
+          echo "App restart triggered."
 
-      # ── Step 6: Print success summary ───────────────────────────────────────
+      # Step 6: Done
       - name: Deployment summary
         run: |
-          echo "============================================"
-          echo "  ✅ Janta Seva deployed successfully!"
-          echo "  Commit : ${{ github.sha }}"
-          echo "  Branch : ${{ github.ref_name }}"
-          echo "  Time   : $(date -u)"
-          echo "============================================"
+          echo "================================="
+          echo "Deployment successful 🚀"
+          echo "Commit: ${{ github.sha }}"
+          echo "================================="
