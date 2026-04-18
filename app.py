@@ -605,7 +605,7 @@ elif "🖼️" in option:
 # ── Footer ────────────────────────────────────────────────────────────────────
 st.markdown("""
 <div class="footer">
-    <div class="footer-left">© 2026 JANTA SEVA · CIVIC INTELLIGENCE PLATFORM · BUILT FOR BHARAT</div>
-    <div class="footer-badge">⬡ Databricks Hackathon 2026</div>
+    <div class="footer-left">© 2025 JANTA SEVA · CIVIC INTELLIGENCE PLATFORM · BUILT FOR BHARAT</div>
+    <div class="footer-badge">⬡ Databricks Hackathon 2025</div>
 </div>
 """, unsafe_allow_html=True)
