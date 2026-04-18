@@ -28,8 +28,8 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
           databricks --version
 
-      # Step 4: Upload app files to Databricks
-      - name: Upload app files to Databricks Workspace
+      # Step 4: Sync entire app folder (BEST METHOD)
+      - name: Upload app folder to Databricks Workspace
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -37,21 +37,17 @@ jobs:
           APP_WORKSPACE_PATH="/Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/janta-seva"
           APP_LOCAL_PATH="e2e-chatbot-app-next"
 
-          echo "Uploading files to $APP_WORKSPACE_PATH ..."
+          echo "Syncing full folder..."
+          echo "Local: $APP_LOCAL_PATH"
+          echo "Remote: $APP_WORKSPACE_PATH"
 
-          for file in app.py app.yaml model_serving_utils.py requirements.txt; do
-            if [ -f "$APP_LOCAL_PATH/$file" ]; then
-              echo "Uploading $file"
-              databricks workspace import \
-                --file "$APP_LOCAL_PATH/$file" \
-                --overwrite \
-                "$APP_WORKSPACE_PATH/$file"
-            else
-              echo "File $file not found, skipping"
-            fi
-          done
+          # Create workspace directory if not exists
+          databricks workspace mkdirs "$APP_WORKSPACE_PATH"
 
-          echo "Upload complete."
+          # Sync entire folder (THIS FIXES YOUR ISSUE)
+          databricks workspace import-dir "$APP_LOCAL_PATH" "$APP_WORKSPACE_PATH" --overwrite
+
+          echo "Upload complete ✅"
 
       # Step 5: Restart Databricks App
       - name: Restart Databricks App
@@ -64,12 +60,14 @@ jobs:
           echo "Restarting app: $APP_NAME"
           databricks apps restart "$APP_NAME"
 
-          echo "App restart triggered."
+          echo "App restart triggered 🚀"
 
       # Step 6: Done
       - name: Deployment summary
         run: |
           echo "================================="
-          echo "Deployment successful 🚀"
+          echo "✅ Deployment successful"
           echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
+          echo "Time: $(date -u)"
           echo "================================="
