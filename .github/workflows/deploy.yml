@@ -35,7 +35,7 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           APP_WORKSPACE_PATH="/Workspace/Users/${{ secrets.DATABRICKS_USER_EMAIL }}/janta-seva"
-          APP_LOCAL_PATH="streamlit-chatbot-app"
+          APP_LOCAL_PATH="e2e-chatbot-app-next"
 
           echo "Uploading files to $APP_WORKSPACE_PATH ..."
 
