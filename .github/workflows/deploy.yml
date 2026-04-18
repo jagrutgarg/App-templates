@@ -22,48 +22,57 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
           databricks --version
 
-      # ── Step 3: Show exact repo structure ────────────────────────────────────
+      # ── Step 3: Show repo structure ───────────────────────────────────────────
       - name: Show repo structure
         run: |
-          echo "=== All files in repo root ==="
+          echo "=== Root files ==="
           find . -maxdepth 1 -type f | sort
-          echo ""
-          echo "=== app.py exists? ==="
-          ls -la app.py && echo "✅ FOUND" || echo "❌ NOT FOUND"
+          ls -la app.py && echo "✅ app.py FOUND" || echo "❌ app.py NOT FOUND"
 
-      # ── Step 4: Upload via Databricks Files API ───────────────────────────────
+      # ── Step 4: Delete old Notebook, then upload fresh files ──────────────────
       - name: Upload app files via Files API
         env:
           DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           APP_WORKSPACE_PATH="/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"
-          APP_LOCAL_PATH="."        # ← files are at the ROOT of the repo
 
-          echo "Uploading to: $APP_WORKSPACE_PATH"
+          # ── A: Delete old app.py which Databricks stored as NOTEBOOK type ──
+          echo "=== Deleting old app.py notebook ==="
+          curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/delete" \
+            -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"path\": \"$APP_WORKSPACE_PATH/app.py\", \"recursive\": false}" \
+            && echo "  ✅ Deleted" || echo "  ℹ️ Nothing to delete (OK)"
 
-          # ── Create directory ──
-          echo "→ Creating workspace directory..."
+          curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/delete" \
+            -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"path\": \"$APP_WORKSPACE_PATH/model_serving_utils.py\", \"recursive\": false}" \
+            && echo "  ✅ Deleted model_serving_utils" || echo "  ℹ️ OK"
+
+          # ── B: Ensure directory exists ──
+          echo ""
+          echo "=== Creating workspace directory ==="
           curl -sf -X POST "$DATABRICKS_HOST/api/2.0/workspace/mkdirs" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"path\": \"$APP_WORKSPACE_PATH\"}" \
-            && echo "  ✅ Directory ready" || echo "  ⚠️ Already exists"
+            && echo "  ✅ Directory ready" || echo "  ⚠️ Already exists (OK)"
 
-          # ── Upload function ──
-          upload_file() {
+          # ── Upload Python files with format=SOURCE (NOT AUTO) ──
+          upload_py() {
             local SRC="$1"
             local DEST="$2"
             local FNAME=$(basename "$SRC")
 
             if [ ! -f "$SRC" ]; then
-              echo "  ⚠️ SKIPPED: $SRC does not exist locally"
-              return 0    # non-fatal — don't fail the whole job
+              echo "  ⚠️ SKIPPED: $SRC not found"
+              return 0
             fi
 
             echo ""
-            echo "→ Uploading: $FNAME  ($(wc -c < "$SRC") bytes)"
-            echo "  Remote: $DEST"
+            echo "→ Uploading Python: $FNAME  ($(wc -c < "$SRC") bytes)"
 
             B64=$(base64 -w 0 "$SRC")
 
@@ -74,33 +83,63 @@ jobs:
               -d "{
                 \"path\": \"$DEST\",
                 \"content\": \"$B64\",
-                \"format\": \"AUTO\",
+                \"format\": \"SOURCE\",
+                \"language\": \"PYTHON\",
                 \"overwrite\": true
               }")
 
-            cat /tmp/upload_resp.json
-            echo ""
+            cat /tmp/upload_resp.json && echo ""
+            [ "$HTTP" = "200" ] && echo "  ✅ OK" || { echo "  ❌ FAILED (HTTP $HTTP)"; return 1; }
+          }
 
-            if [ "$HTTP" = "200" ]; then
-              echo "  ✅ $FNAME uploaded OK"
+          # ── Upload non-Python files via workspace-files PUT ──
+          upload_raw() {
+            local SRC="$1"
+            local DEST="$2"
+            local FNAME=$(basename "$SRC")
+
+            if [ ! -f "$SRC" ]; then
+              echo "  ⚠️ SKIPPED: $SRC not found"
+              return 0
+            fi
+
+            echo ""
+            echo "→ Uploading raw file: $FNAME"
+
+            HTTP=$(curl -s -o /tmp/upload_resp.json -w "%{http_code}" \
+              -X PUT "$DATABRICKS_HOST/api/2.0/workspace-files$DEST" \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$SRC")
+
+            cat /tmp/upload_resp.json && echo ""
+            if [ "$HTTP" = "200" ] || [ "$HTTP" = "204" ]; then
+              echo "  ✅ OK"
             else
-              echo "  ❌ $FNAME FAILED (HTTP $HTTP)"
-              return 1
+              echo "  ⚠️ PUT failed ($HTTP) — falling back to workspace import"
+              B64=$(base64 -w 0 "$SRC")
+              curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/import" \
+                -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"path\": \"$DEST\", \"content\": \"$B64\", \"format\": \"AUTO\", \"overwrite\": true}" \
+                && echo "  ✅ Fallback OK" || echo "  ❌ Fallback also failed"
             fi
           }
 
-          # ── Upload all files from root ──
-          upload_file "$APP_LOCAL_PATH/app.py"                 "$APP_WORKSPACE_PATH/app.py"
-          upload_file "$APP_LOCAL_PATH/app.yaml"               "$APP_WORKSPACE_PATH/app.yaml"
-          upload_file "$APP_LOCAL_PATH/requirements.txt"       "$APP_WORKSPACE_PATH/requirements.txt"
-          upload_file "$APP_LOCAL_PATH/model_serving_utils.py" "$APP_WORKSPACE_PATH/model_serving_utils.py"
+          # ── C: Upload all files ──
+          echo ""
+          echo "=== Uploading files ==="
+          upload_py  "./app.py"                 "$APP_WORKSPACE_PATH/app.py"
+          upload_py  "./model_serving_utils.py" "$APP_WORKSPACE_PATH/model_serving_utils.py"
+          upload_raw "./app.yaml"               "$APP_WORKSPACE_PATH/app.yaml"
+          upload_raw "./requirements.txt"       "$APP_WORKSPACE_PATH/requirements.txt"
 
           echo ""
-          echo "=== Verifying files in Databricks workspace ==="
+          echo "=== Verifying workspace contents ==="
           curl -s "$DATABRICKS_HOST/api/2.0/workspace/list?path=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"))')" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" | python3 -m json.tool
 
-      # ── Step 5: Trigger fresh deployment ─────────────────────────────────────
+      # ── Step 5: Trigger deployment ────────────────────────────────────────────
       - name: Trigger deployment
         env:
           DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
@@ -109,7 +148,6 @@ jobs:
           APP_NAME="${{ secrets.DATABRICKS_APP_NAME }}"
           SOURCE="/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"
 
-          echo "Triggering deployment: $APP_NAME"
           RESP=$(curl -s -w "\nHTTP:%{http_code}" \
             -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/deployments" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" \
@@ -120,9 +158,9 @@ jobs:
           CODE=$(echo "$RESP" | grep "HTTP:" | cut -d: -f2)
 
           if [ "$CODE" = "200" ] || [ "$CODE" = "201" ]; then
-            echo "✅ Deployment triggered (HTTP $CODE)"
+            echo "✅ Deployment triggered"
           else
-            echo "⚠️ HTTP $CODE — sending restart as fallback"
+            echo "⚠️ Sending restart as fallback"
             curl -s -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/restart" \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               -H "Content-Type: application/json" || true
