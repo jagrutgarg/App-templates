@@ -1,5 +1,5 @@
 import streamlit as st
-#hi
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Janta Seva",
@@ -564,7 +564,8 @@ elif "🖼️" in option:
 
     with col2:
         if file:
-            st.image(file, caption="Uploaded Image", use_column_width=True)
+            # FIX: use_container_width instead of deprecated use_column_width
+            st.image(file, caption="Uploaded Image", use_container_width=True)
             st.markdown("""
             <div style="background:rgba(56,189,248,.07);border:1px solid rgba(56,189,248,.2);
                         border-radius:14px;padding:1.25rem;margin-top:1rem;">
