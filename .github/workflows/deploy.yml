@@ -41,19 +41,26 @@ jobs:
           echo "Local: $APP_LOCAL_PATH"
           echo "Remote: $APP_WORKSPACE_PATH"
 
-          # Create workspace directory if not exists
           databricks workspace mkdirs "$APP_WORKSPACE_PATH"
 
-          # Upload entire folder
           databricks workspace import-dir "$APP_LOCAL_PATH" "$APP_WORKSPACE_PATH" --overwrite
 
           echo "Upload complete ✅"
 
-      # Step 5: No restart needed
-      - name: Skip restart (auto handled by Databricks)
+      # Step 5: Restart app via API (IMPORTANT FIX)
+      - name: Restart Databricks App via API
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          APP_NAME: ${{ secrets.DATABRICKS_APP_NAME }}
         run: |
-          echo "Databricks will automatically detect changes."
-          echo "If not, restart once manually from UI."
+          echo "Restarting app: $APP_NAME"
+
+          curl -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/restart" \
+            -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+            -H "Content-Type: application/json"
+
+          echo "Restart request sent 🚀"
 
       # Step 6: Deployment summary
       - name: Deployment summary
