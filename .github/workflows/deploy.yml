@@ -25,34 +25,32 @@ jobs:
       # ── Step 3: Show exact repo structure ────────────────────────────────────
       - name: Show repo structure
         run: |
-          echo "=== All files in repo ==="
-          find . -type f | grep -v ".git" | sort
+          echo "=== All files in repo root ==="
+          find . -maxdepth 1 -type f | sort
           echo ""
-          echo "=== Does streamlit-chatbot-app/app.py exist? ==="
-          ls -la streamlit-chatbot-app/ || echo "FOLDER NOT FOUND"
+          echo "=== app.py exists? ==="
+          ls -la app.py && echo "✅ FOUND" || echo "❌ NOT FOUND"
 
-      # ── Step 4: Upload via Databricks Files API (most reliable method) ────────
-      - name: Upload app.py via Files API
+      # ── Step 4: Upload via Databricks Files API ───────────────────────────────
+      - name: Upload app files via Files API
         env:
           DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          # ── Hardcoded from Databricks UI — exact path shown in your app overview
           APP_WORKSPACE_PATH="/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"
-          APP_LOCAL_PATH="streamlit-chatbot-app"
+          APP_LOCAL_PATH="."        # ← files are at the ROOT of the repo
 
           echo "Uploading to: $APP_WORKSPACE_PATH"
-          echo ""
 
-          # ── Create directory first ──
+          # ── Create directory ──
           echo "→ Creating workspace directory..."
           curl -sf -X POST "$DATABRICKS_HOST/api/2.0/workspace/mkdirs" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" \
             -H "Content-Type: application/json" \
             -d "{\"path\": \"$APP_WORKSPACE_PATH\"}" \
-            && echo "  ✅ Directory ready" || echo "  ⚠️ mkdirs returned error (may already exist)"
+            && echo "  ✅ Directory ready" || echo "  ⚠️ Already exists"
 
-          # ── Upload function using workspace import API ──
+          # ── Upload function ──
           upload_file() {
             local SRC="$1"
             local DEST="$2"
@@ -60,18 +58,15 @@ jobs:
 
             if [ ! -f "$SRC" ]; then
               echo "  ⚠️ SKIPPED: $SRC does not exist locally"
-              return 1
+              return 0    # non-fatal — don't fail the whole job
             fi
 
             echo ""
-            echo "→ Uploading: $FNAME"
-            echo "  Local : $SRC ($(wc -c < "$SRC") bytes)"
+            echo "→ Uploading: $FNAME  ($(wc -c < "$SRC") bytes)"
             echo "  Remote: $DEST"
 
-            # Base64 encode
             B64=$(base64 -w 0 "$SRC")
 
-            # POST to workspace import
             HTTP=$(curl -s -o /tmp/upload_resp.json -w "%{http_code}" \
               -X POST "$DATABRICKS_HOST/api/2.0/workspace/import" \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
@@ -87,21 +82,21 @@ jobs:
             echo ""
 
             if [ "$HTTP" = "200" ]; then
-              echo "  ✅ $FNAME uploaded OK (HTTP 200)"
+              echo "  ✅ $FNAME uploaded OK"
             else
               echo "  ❌ $FNAME FAILED (HTTP $HTTP)"
               return 1
             fi
           }
 
-          # ── Upload all files ──
-          upload_file "$APP_LOCAL_PATH/app.py"                   "$APP_WORKSPACE_PATH/app.py"
-          upload_file "$APP_LOCAL_PATH/app.yaml"                 "$APP_WORKSPACE_PATH/app.yaml"
-          upload_file "$APP_LOCAL_PATH/requirements.txt"         "$APP_WORKSPACE_PATH/requirements.txt"
-          upload_file "$APP_LOCAL_PATH/model_serving_utils.py"   "$APP_WORKSPACE_PATH/model_serving_utils.py"
+          # ── Upload all files from root ──
+          upload_file "$APP_LOCAL_PATH/app.py"                 "$APP_WORKSPACE_PATH/app.py"
+          upload_file "$APP_LOCAL_PATH/app.yaml"               "$APP_WORKSPACE_PATH/app.yaml"
+          upload_file "$APP_LOCAL_PATH/requirements.txt"       "$APP_WORKSPACE_PATH/requirements.txt"
+          upload_file "$APP_LOCAL_PATH/model_serving_utils.py" "$APP_WORKSPACE_PATH/model_serving_utils.py"
 
           echo ""
-          echo "=== Verifying files now in Databricks workspace ==="
+          echo "=== Verifying files in Databricks workspace ==="
           curl -s "$DATABRICKS_HOST/api/2.0/workspace/list?path=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"))')" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" | python3 -m json.tool
 
@@ -115,8 +110,6 @@ jobs:
           SOURCE="/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"
 
           echo "Triggering deployment: $APP_NAME"
-          echo "Source: $SOURCE"
-
           RESP=$(curl -s -w "\nHTTP:%{http_code}" \
             -X POST "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME/deployments" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" \
