@@ -27,43 +27,39 @@ jobs:
         run: |
           echo "=== Root files ==="
           find . -maxdepth 1 -type f | sort
-          ls -la app.py && echo "✅ app.py FOUND" || echo "❌ app.py NOT FOUND"
 
-      # ── Step 4: Delete old Notebook, then upload fresh files ──────────────────
-      - name: Upload app files via Files API
+      # ── Step 4: Upload all files ───────────────────────────────────────────────
+      - name: Upload app files
         env:
           DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           APP_WORKSPACE_PATH="/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"
 
-          # ── A: Delete old app.py which Databricks stored as NOTEBOOK type ──
-          echo "=== Deleting old app.py notebook ==="
-          curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/delete" \
-            -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"path\": \"$APP_WORKSPACE_PATH/app.py\", \"recursive\": false}" \
-            && echo "  ✅ Deleted" || echo "  ℹ️ Nothing to delete (OK)"
+          # ── Delete old notebook-typed files to avoid type mismatch ──
+          echo "=== Deleting old files ==="
+          for ITEM in app.py model_serving_utils.py app.yaml requirements.txt; do
+            curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/delete" \
+              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"path\": \"$APP_WORKSPACE_PATH/$ITEM\", \"recursive\": false}" \
+              && echo "  Deleted $ITEM" || echo "  $ITEM not found (OK)"
+          done
 
-          curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/delete" \
-            -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "{\"path\": \"$APP_WORKSPACE_PATH/model_serving_utils.py\", \"recursive\": false}" \
-            && echo "  ✅ Deleted model_serving_utils" || echo "  ℹ️ OK"
-
-          # ── B: Ensure directory exists ──
+          # ── Ensure directory exists ──
           echo ""
-          echo "=== Creating workspace directory ==="
-          curl -sf -X POST "$DATABRICKS_HOST/api/2.0/workspace/mkdirs" \
+          echo "=== Creating directory ==="
+          curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/mkdirs" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "{\"path\": \"$APP_WORKSPACE_PATH\"}" \
-            && echo "  ✅ Directory ready" || echo "  ⚠️ Already exists (OK)"
+            -d "{\"path\": \"$APP_WORKSPACE_PATH\"}" && echo "Directory ready"
 
-          # ── Upload Python files with format=SOURCE (NOT AUTO) ──
-          upload_py() {
+          # ── Generic upload via workspace/import (works for ALL file types) ──
+          upload() {
             local SRC="$1"
             local DEST="$2"
+            local FORMAT="$3"   # SOURCE or AUTO
+            local LANG="$4"     # PYTHON or "" (empty for non-python)
             local FNAME=$(basename "$SRC")
 
             if [ ! -f "$SRC" ]; then
@@ -72,70 +68,39 @@ jobs:
             fi
 
             echo ""
-            echo "→ Uploading Python: $FNAME  ($(wc -c < "$SRC") bytes)"
+            echo "→ Uploading: $FNAME ($(wc -c < "$SRC") bytes)"
 
             B64=$(base64 -w 0 "$SRC")
 
-            HTTP=$(curl -s -o /tmp/upload_resp.json -w "%{http_code}" \
+            # Build JSON body conditionally
+            if [ -n "$LANG" ]; then
+              BODY="{\"path\":\"$DEST\",\"content\":\"$B64\",\"format\":\"$FORMAT\",\"language\":\"$LANG\",\"overwrite\":true}"
+            else
+              BODY="{\"path\":\"$DEST\",\"content\":\"$B64\",\"format\":\"$FORMAT\",\"overwrite\":true}"
+            fi
+
+            HTTP=$(curl -s -o /tmp/resp.json -w "%{http_code}" \
               -X POST "$DATABRICKS_HOST/api/2.0/workspace/import" \
               -H "Authorization: Bearer $DATABRICKS_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "{
-                \"path\": \"$DEST\",
-                \"content\": \"$B64\",
-                \"format\": \"SOURCE\",
-                \"language\": \"PYTHON\",
-                \"overwrite\": true
-              }")
+              -d "$BODY")
 
-            cat /tmp/upload_resp.json && echo ""
-            [ "$HTTP" = "200" ] && echo "  ✅ OK" || { echo "  ❌ FAILED (HTTP $HTTP)"; return 1; }
+            cat /tmp/resp.json && echo ""
+            [ "$HTTP" = "200" ] && echo "  ✅ $FNAME OK" || { echo "  ❌ $FNAME FAILED (HTTP $HTTP)"; return 1; }
           }
 
-          # ── Upload non-Python files via workspace-files PUT ──
-          upload_raw() {
-            local SRC="$1"
-            local DEST="$2"
-            local FNAME=$(basename "$SRC")
-
-            if [ ! -f "$SRC" ]; then
-              echo "  ⚠️ SKIPPED: $SRC not found"
-              return 0
-            fi
-
-            echo ""
-            echo "→ Uploading raw file: $FNAME"
-
-            HTTP=$(curl -s -o /tmp/upload_resp.json -w "%{http_code}" \
-              -X PUT "$DATABRICKS_HOST/api/2.0/workspace-files$DEST" \
-              -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-              -H "Content-Type: application/octet-stream" \
-              --data-binary "@$SRC")
-
-            cat /tmp/upload_resp.json && echo ""
-            if [ "$HTTP" = "200" ] || [ "$HTTP" = "204" ]; then
-              echo "  ✅ OK"
-            else
-              echo "  ⚠️ PUT failed ($HTTP) — falling back to workspace import"
-              B64=$(base64 -w 0 "$SRC")
-              curl -s -X POST "$DATABRICKS_HOST/api/2.0/workspace/import" \
-                -H "Authorization: Bearer $DATABRICKS_TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{\"path\": \"$DEST\", \"content\": \"$B64\", \"format\": \"AUTO\", \"overwrite\": true}" \
-                && echo "  ✅ Fallback OK" || echo "  ❌ Fallback also failed"
-            fi
-          }
-
-          # ── C: Upload all files ──
           echo ""
           echo "=== Uploading files ==="
-          upload_py  "./app.py"                 "$APP_WORKSPACE_PATH/app.py"
-          upload_py  "./model_serving_utils.py" "$APP_WORKSPACE_PATH/model_serving_utils.py"
-          upload_raw "./app.yaml"               "$APP_WORKSPACE_PATH/app.yaml"
-          upload_raw "./requirements.txt"       "$APP_WORKSPACE_PATH/requirements.txt"
+          # Python files — SOURCE format with PYTHON language
+          upload "./app.py"                 "$APP_WORKSPACE_PATH/app.py"                 "SOURCE" "PYTHON"
+          upload "./model_serving_utils.py" "$APP_WORKSPACE_PATH/model_serving_utils.py" "SOURCE" "PYTHON"
+
+          # Non-python files — AUTO format, no language
+          upload "./app.yaml"               "$APP_WORKSPACE_PATH/app.yaml"               "AUTO"   ""
+          upload "./requirements.txt"       "$APP_WORKSPACE_PATH/requirements.txt"       "AUTO"   ""
 
           echo ""
-          echo "=== Verifying workspace contents ==="
+          echo "=== Verifying workspace ==="
           curl -s "$DATABRICKS_HOST/api/2.0/workspace/list?path=$(python3 -c 'import urllib.parse; print(urllib.parse.quote("/Workspace/Users/mems250005018@iiti.ac.in/janta-seva"))')" \
             -H "Authorization: Bearer $DATABRICKS_TOKEN" | python3 -m json.tool
 
@@ -174,8 +139,8 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           APP_NAME="${{ secrets.DATABRICKS_APP_NAME }}"
-          for i in $(seq 1 6); do
-            sleep 15
+          for i in $(seq 1 8); do
+            sleep 20
             RAW=$(curl -s "$DATABRICKS_HOST/api/2.0/apps/$APP_NAME" \
               -H "Authorization: Bearer $DATABRICKS_TOKEN")
             STATE=$(echo "$RAW" | python3 -c "
@@ -185,7 +150,7 @@ jobs:
             print(d.get('status',{}).get('state') or d.get('state','UNKNOWN'))
           except: print('PARSE_ERR')
           " 2>/dev/null)
-            echo "  Check $i/6 → $STATE"
+            echo "  Check $i/8 → $STATE"
             [ "$STATE" = "RUNNING" ] && echo "✅ App is live!" && exit 0
           done
           echo "ℹ️ Check Databricks UI for final status"
